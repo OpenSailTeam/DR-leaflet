@@ -1,0 +1,56 @@
+<!-- Discovery Ridge Leaflet map container -->
+<div
+  id="dr-lot-map"
+  data-svg-url="https://cdn.jsdelivr.net/gh/OWNER/REPO@main/assets/discovery-ridge-2026-lot-map.svg"
+></div>
+
+<!-- Status labels, colors, and legend order are public page config. -->
+<script id="dr-map-config" type="application/json">
+  {
+    "statuses": [
+      { "label": "Sold", "color": "#bf0000", "sort": 10 },
+      { "label": "Builder Inventory", "color": "#80007e", "sort": 20 },
+      { "label": "Developer Inventory", "color": "#4fa5cc", "sort": 30 },
+      { "label": "Spec", "color": "#f3a51d", "sort": 40 }
+    ]
+  }
+</script>
+
+<!--
+  Hidden CMS JSON source.
+
+  Webflow Collection List setup:
+  1. Add one hidden dynamic Collection List sourced from Lots with Show = 100.
+  2. Duplicate it, set Skip = 100, and keep Show = 100 for lots 101-200.
+  3. Put this embed inside each Collection item in both lists.
+  4. Bind the placeholder values below to the matching CMS fields using Webflow dynamic embeds.
+-->
+<script type="application/json" class="dr-lot-json">
+  {
+    "name": "WEBFLOW_FIELD_NAME",
+    "slug": "WEBFLOW_FIELD_SLUG",
+    "svgId": "WEBFLOW_FIELD_SVG_ID",
+    "status": "WEBFLOW_FIELD_STATUS",
+    "lotNumber": "WEBFLOW_FIELD_LOT_NUMBER",
+    "block": "WEBFLOW_FIELD_BLOCK",
+    "width": "WEBFLOW_FIELD_WIDTH",
+    "depth": "WEBFLOW_FIELD_DEPTH",
+    "type": "WEBFLOW_FIELD_TYPE",
+    "price": "WEBFLOW_FIELD_PRICE",
+    "builder": "WEBFLOW_FIELD_BUILDER_SLUG_OR_NAME",
+    "imageUrl": "WEBFLOW_FIELD_IMAGE_URL",
+    "buttonText": "WEBFLOW_FIELD_BUTTON_TEXT",
+    "buttonUrl": "WEBFLOW_FIELD_BUTTON_URL"
+  }
+</script>
+
+<!-- Optional buttons elsewhere on the page can focus/open a lot. -->
+<a href="#dr-lot-map" data-dr-lot-slug="8-mackenzie-road">Show on map</a>
+<a href="#dr-lot-map" data-dr-svg-id="path123">Show SVG ID on map</a>
+
+<!-- Bootstrap the map. Use a version tag instead of @main for production once this repo is public. -->
+<script>
+  window.DRMapsQueue = window.DRMapsQueue || [];
+  window.DRMapsQueue.push({ type: "initLotMap" });
+</script>
+<script src="https://cdn.jsdelivr.net/gh/OWNER/REPO@main/drmaps-loader.js"></script>
