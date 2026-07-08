@@ -41,7 +41,13 @@ Each public lot JSON object should include:
 Use `@main` only for staging. Production embeds should point to an immutable version tag after pushing this directory to its own public GitHub repository.
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/OWNER/REPO@TAG/drmaps-loader.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/OpenSailTeam/DR-leaflet@TAG/drmaps-loader.js"></script>
+```
+
+Staging can use:
+
+```html
+<script src="https://cdn.jsdelivr.net/gh/OpenSailTeam/DR-leaflet@main/drmaps-loader.js"></script>
 ```
 
 ## Safety
