@@ -496,6 +496,9 @@
     var isPinned = false;
     var cardHovered = false;
     var closeTimer = null;
+    var hoverSwitchTimer = null;
+    var pendingHover = null;
+    var hoverSwitchDelay = 110;
 
     shell.className = "dr-lot-card-shell";
     shell.hidden = true;
@@ -536,11 +539,22 @@
     function show(shape, lot, options) {
       if (!shape || !lot) return false;
       options = options || {};
-      if (isPinned && !options.pinned) return true;
+      if (options.pinned) {
+        clearPendingHover();
+        return showNow(shape, lot, true);
+      }
+      if (isPinned) return true;
+      if (!currentShape || currentShape === shape || shell.hidden) {
+        clearPendingHover();
+        return showNow(shape, lot, false);
+      }
+      return scheduleHoverSwitch(shape, lot);
+    }
 
+    function showNow(shape, lot, pinned) {
       clearCloseTimer();
       var previousShape = currentShape;
-      isPinned = !!options.pinned;
+      isPinned = !!pinned;
       currentShape = shape;
       currentLot = lot;
       hoverShape = isPinned ? null : shape;
@@ -572,7 +586,26 @@
       return true;
     }
 
+    function scheduleHoverSwitch(shape, lot) {
+      clearCloseTimer();
+      if (pendingHover && pendingHover.shape === shape) return true;
+      clearPendingHover();
+      pendingHover = { shape: shape, lot: lot };
+      hoverSwitchTimer = window.setTimeout(function () {
+        var pending = pendingHover;
+        clearPendingHover();
+        if (!pending || isPinned) return;
+        showNow(pending.shape, pending.lot, false);
+      }, hoverSwitchDelay);
+      return true;
+    }
+
     function scheduleHoverClose(shape) {
+      if (pendingHover && pendingHover.shape === shape) {
+        clearPendingHover();
+        if (!isPinned && currentShape && !cardHovered) scheduleHoverClose(currentShape);
+        return;
+      }
       if (isPinned || shape !== hoverShape) return;
       clearCloseTimer();
       closeTimer = window.setTimeout(function () {
@@ -587,6 +620,7 @@
 
     function close() {
       clearCloseTimer();
+      clearPendingHover();
       if (activeShape) {
         activeShape.classList.remove("is-active");
         setShapeExpanded(activeShape, false);
@@ -656,6 +690,14 @@
       if (!closeTimer) return;
       window.clearTimeout(closeTimer);
       closeTimer = null;
+    }
+
+    function clearPendingHover() {
+      if (hoverSwitchTimer) {
+        window.clearTimeout(hoverSwitchTimer);
+        hoverSwitchTimer = null;
+      }
+      pendingHover = null;
     }
 
     function setShapeExpanded(shape, expanded) {
