@@ -415,6 +415,7 @@
     if (lot.slug) state.shapesBySlug[lot.slug] = shape;
     if (shapeId && !state.shapesBySvgId[shapeId]) state.shapesBySvgId[shapeId] = shape;
     shape.classList.add("dr-lot");
+    shape.style.pointerEvents = "all";
     shape.setAttribute("tabindex", "0");
     shape.setAttribute("role", "button");
     shape.setAttribute("aria-label", lot.name || lot.slug || lot.svgId || shapeId);
