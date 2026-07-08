@@ -17,14 +17,18 @@
 </script>
 
 <!--
-  Hidden CMS JSON source.
+	  Hidden CMS JSON source.
 
-  Webflow Collection List setup:
-  1. Add one hidden dynamic Collection List sourced from Lots with Show = 100.
-  2. Duplicate it, set Skip = 100, and keep Show = 100 for lots 101-200.
-  3. Put this embed inside each Collection item in both lists.
-  4. Bind the placeholder values below to the matching CMS fields using Webflow dynamic embeds.
--->
+	  Webflow Collection List setup:
+	  1. Add one hidden dynamic Collection List sourced from Lots with Show = 100.
+	  2. Enable native Collection List pagination so Webflow renders a Next link.
+	  3. Hide the list and pagination wrapper with CSS/display settings, but keep them in the DOM.
+	  4. Put this embed inside each Collection item.
+	  5. Bind the placeholder values below to the matching CMS fields using Webflow dynamic embeds.
+
+	  On load, DRMaps follows same-origin Webflow .w-pagination-next links,
+	  fetches each paginated page as HTML, and parses only the JSON script tags.
+	-->
 <script type="application/json" class="dr-lot-json">
   {
     "name": "WEBFLOW_FIELD_NAME",

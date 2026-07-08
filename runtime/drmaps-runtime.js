@@ -114,99 +114,110 @@
 
     var mapData = getMapData(mapEl, options);
     var config = getConfig(options);
-    var lots = getLotsData();
-    var state = {
-      mapId: mapId,
-      mapEl: mapEl,
-      map: null,
-      lots: lots,
-      lotsBySlug: buildLotsBySlug(lots),
-      lotsBySvgId: buildLotsBySvgId(lots),
-      shapesBySlug: {},
-      shapesBySvgId: {},
-      shapeLots: {},
-      boundLots: [],
-      warnings: [],
-    };
-    runtimeState.maps[mapId] = state;
-
-    if (!mapData.svgUrl) {
-      warn(state, "Missing SVG URL for Discovery Ridge map.");
-      return false;
-    }
-
-    var minZoom = parseNumber(firstDefined(options.minZoom, mapEl.dataset.minZoom));
-    if (minZoom === null) minZoom = -2;
-
-    var map = window.L.map(mapId, {
-      crs: window.L.CRS.Simple,
-      zoomSnap: 0.1,
-      zoomDelta: 0.5,
-      wheelPxPerZoomLevel: 80,
-      minZoom: minZoom,
-      attributionControl: false,
-    });
-    state.map = map;
 
     mapEl.classList.add("dr-map");
     if (!mapEl.style.minHeight) mapEl.style.minHeight = "560px";
 
-    window.addEventListener("resize", function () {
-      map.invalidateSize();
-    });
+    loadLotsData(mapEl, options)
+      .then(function (lotData) {
+        var lots = lotData.lots;
+        var state = {
+          mapId: mapId,
+          mapEl: mapEl,
+          map: null,
+          lots: lots,
+          lotsBySlug: buildLotsBySlug(lots),
+          lotsBySvgId: buildLotsBySvgId(lots),
+          shapesBySlug: {},
+          shapesBySvgId: {},
+          shapeLots: {},
+          boundLots: [],
+          warnings: [],
+          lotDataPagesLoaded: lotData.pagesLoaded,
+        };
+        runtimeState.maps[mapId] = state;
+        lotData.warnings.forEach(function (message) {
+          warn(state, message);
+        });
 
-    fetch(mapData.svgUrl)
-      .then(function (response) {
-        if (!response.ok) throw new Error("Failed to fetch SVG: " + response.status);
-        return response.text();
-      })
-      .then(function (svgText) {
-        var parsed = parseSvg(svgText);
-        var svg = parsed.svg;
-        var viewBox = parseViewBox(mapData.viewBox || svg.getAttribute("viewBox"));
-        var width = parseLength(svg.getAttribute("width")) || mapData.width;
-        var height = parseLength(svg.getAttribute("height")) || mapData.height;
-
-        if (!viewBox && width && height) {
-          viewBox = { minX: 0, minY: 0, width: width, height: height };
+        if (!mapData.svgUrl) {
+          warn(state, "Missing SVG URL for Discovery Ridge map.");
+          return false;
         }
-        if (!viewBox) {
-          viewBox = { minX: 0, minY: 0, width: 1000, height: 1000 };
-          warn(state, "SVG missing viewBox and size; using 1000x1000 fallback bounds.");
-        }
 
-        svg.setAttribute("viewBox", [viewBox.minX, viewBox.minY, viewBox.width, viewBox.height].join(" "));
-        svg.setAttribute("width", viewBox.width);
-        svg.setAttribute("height", viewBox.height);
-        svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+        var minZoom = parseNumber(firstDefined(options.minZoom, mapEl.dataset.minZoom));
+        if (minZoom === null) minZoom = -2;
 
-        var bounds = window.L.latLngBounds([
-          [viewBox.minY, viewBox.minX],
-          [viewBox.minY + viewBox.height, viewBox.minX + viewBox.width],
-        ]);
+        var map = window.L.map(mapId, {
+          crs: window.L.CRS.Simple,
+          zoomSnap: 0.1,
+          zoomDelta: 0.5,
+          wheelPxPerZoomLevel: 80,
+          minZoom: minZoom,
+          attributionControl: false,
+        });
+        state.map = map;
 
-        var overlay = window.L.svgOverlay(svg, bounds, { interactive: true });
-        overlay.addTo(map);
-        fitMap(map, bounds, mapEl, options);
-        map.setMaxBounds(bounds.pad(1.0));
+        window.addEventListener("resize", function () {
+          map.invalidateSize();
+        });
 
-        var svgRoot = overlay.getElement();
-        state.svgRoot = svgRoot;
-        prepareSvgForMap(svgRoot);
-        validateAndIndexSvg(state, svgRoot);
-        bindLotEvents(state, config);
-        addStatusDots(state, config);
-        addLegend(state, config);
-        bindExternalFocusHandlers(state, config);
-        openDeepLinkedLot(state, config);
+        return fetch(mapData.svgUrl)
+          .then(function (response) {
+            if (!response.ok) throw new Error("Failed to fetch SVG: " + response.status);
+            return response.text();
+          })
+          .then(function (svgText) {
+            var parsed = parseSvg(svgText);
+            var svg = parsed.svg;
+            var viewBox = parseViewBox(mapData.viewBox || svg.getAttribute("viewBox"));
+            var width = parseLength(svg.getAttribute("width")) || mapData.width;
+            var height = parseLength(svg.getAttribute("height")) || mapData.height;
 
-        if (typeof options.onReady === "function") {
-          options.onReady({
-            map: map,
-            lots: lots.slice(),
-            warnings: state.warnings.slice(),
+            if (!viewBox && width && height) {
+              viewBox = { minX: 0, minY: 0, width: width, height: height };
+            }
+            if (!viewBox) {
+              viewBox = { minX: 0, minY: 0, width: 1000, height: 1000 };
+              warn(state, "SVG missing viewBox and size; using 1000x1000 fallback bounds.");
+            }
+
+            svg.setAttribute("viewBox", [viewBox.minX, viewBox.minY, viewBox.width, viewBox.height].join(" "));
+            svg.setAttribute("width", viewBox.width);
+            svg.setAttribute("height", viewBox.height);
+            svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+
+            var bounds = window.L.latLngBounds([
+              [viewBox.minY, viewBox.minX],
+              [viewBox.minY + viewBox.height, viewBox.minX + viewBox.width],
+            ]);
+
+            var overlay = window.L.svgOverlay(svg, bounds, { interactive: true });
+            overlay.addTo(map);
+            fitMap(map, bounds, mapEl, options);
+            map.setMaxBounds(bounds.pad(1.0));
+
+            var svgRoot = overlay.getElement();
+            state.svgRoot = svgRoot;
+            prepareSvgForMap(svgRoot);
+            validateAndIndexSvg(state, svgRoot);
+            bindLotEvents(state, config);
+            addStatusDots(state, config);
+            addLegend(state, config);
+            bindExternalFocusHandlers(state, config);
+            openDeepLinkedLot(state, config);
+
+            if (typeof options.onReady === "function") {
+              options.onReady({
+                map: map,
+                lots: lots.slice(),
+                warnings: state.warnings.slice(),
+                lotDataPagesLoaded: state.lotDataPagesLoaded,
+              });
+            }
+
+            return true;
           });
-        }
       })
       .catch(function (err) {
         mapEl.removeAttribute("data-drmaps-initialized");
@@ -243,16 +254,135 @@
     };
   }
 
-  function getLotsData() {
+  function loadLotsData(mapEl, options) {
+    var result = {
+      lots: getLotsData(document),
+      warnings: [],
+      pagesLoaded: 1,
+    };
+
+    if (!shouldLoadPaginatedLots(mapEl, options) || typeof window.fetch !== "function") {
+      return Promise.resolve(result);
+    }
+
+    var maxPages = parseNumber(firstDefined(options.maxLotPages, options.maxLotsPages, mapEl.dataset.maxLotPages, mapEl.dataset.maxLotsPages));
+    if (maxPages === null || maxPages < 1) maxPages = 10;
+
+    var visited = Object.create(null);
+    var currentUrl = normalizePageUrl(window.location.href);
+    if (currentUrl) visited[currentUrl] = true;
+
+    function loadNext(nextUrl) {
+      if (!nextUrl) return Promise.resolve(result);
+      var normalizedUrl = normalizePageUrl(nextUrl);
+      if (!normalizedUrl || visited[normalizedUrl]) return Promise.resolve(result);
+      if (result.pagesLoaded >= maxPages) {
+        result.warnings.push("Stopped loading paginated lot JSON after " + maxPages + " pages.");
+        return Promise.resolve(result);
+      }
+
+      visited[normalizedUrl] = true;
+      return fetch(normalizedUrl, { credentials: "same-origin" })
+        .then(function (response) {
+          if (!response.ok) throw new Error("HTTP " + response.status);
+          return response.text();
+        })
+        .then(function (html) {
+          var doc = new DOMParser().parseFromString(html, "text/html");
+          var pageLots = getLotsData(doc);
+          result.pagesLoaded += 1;
+          if (!pageLots.length) {
+            result.warnings.push("Paginated lot JSON page contained no lots: " + normalizedUrl);
+          }
+          result.lots = dedupeLots(result.lots.concat(pageLots));
+          return loadNext(getNextLotsPageUrl(doc, normalizedUrl, options));
+        })
+        .catch(function (err) {
+          result.warnings.push("Unable to load paginated lot JSON page: " + normalizedUrl + " (" + (err && err.message ? err.message : err) + ")");
+          return result;
+        });
+    }
+
+    return loadNext(getNextLotsPageUrl(document, window.location.href, options));
+  }
+
+  function shouldLoadPaginatedLots(mapEl, options) {
+    var value = firstDefined(
+      options.loadPaginatedLots,
+      options.loadAllLots,
+      mapEl.dataset.loadPaginatedLots,
+      mapEl.dataset.loadAllLots,
+      mapEl.dataset.drLoadPaginatedLots
+    );
+    if (value === null) return true;
+    var normalized = String(value).trim().toLowerCase();
+    return normalized !== "false" && normalized !== "0" && normalized !== "no";
+  }
+
+  function getNextLotsPageUrl(root, baseUrl, options) {
+    if (!root || typeof root.querySelectorAll !== "function") return "";
+    var selectors = [];
+    var configured = firstDefined(options.lotsNextSelector, options.lotNextSelector, options.nextLotsPageSelector);
+    if (configured) selectors.push(String(configured));
+    selectors = selectors.concat([
+      "[data-dr-lots-pagination] .w-pagination-next[href]",
+      ".dr-lots-pagination .w-pagination-next[href]",
+      ".w-dyn-list .w-pagination-next[href]",
+      ".w-pagination-next[href]",
+      "a[rel='next'][href]",
+      "a[aria-label='Next Page'][href]",
+      "a[aria-label='Next'][href]",
+    ]);
+
+    for (var i = 0; i < selectors.length; i += 1) {
+      var links = root.querySelectorAll(selectors[i]);
+      for (var j = 0; j < links.length; j += 1) {
+        var url = getUsablePaginationUrl(links[j], baseUrl);
+        if (url) return url;
+      }
+    }
+    return "";
+  }
+
+  function getUsablePaginationUrl(link, baseUrl) {
+    if (!link || !link.getAttribute) return "";
+    if (link.getAttribute("aria-disabled") === "true") return "";
+    var className = String(link.className || "");
+    if (/\bw-condition-invisible\b|\bw--current\b|\bis-disabled\b/.test(className)) return "";
+    var href = String(link.getAttribute("href") || "").trim();
+    if (!href || href === "#" || /^javascript:/i.test(href)) return "";
+    try {
+      var url = new URL(href, baseUrl || window.location.href);
+      if (url.origin !== window.location.origin) return "";
+      url.hash = "";
+      return url.href;
+    } catch (err) {
+      return "";
+    }
+  }
+
+  function normalizePageUrl(value) {
+    try {
+      var url = new URL(value, window.location.href);
+      if (url.origin !== window.location.origin) return "";
+      url.hash = "";
+      return url.href;
+    } catch (err) {
+      return "";
+    }
+  }
+
+  function getLotsData(root) {
+    root = root || document;
     var lots = [];
-    var aggregate = parseJsonScript(LOTS_DATA_ID);
+    var aggregate = parseJsonScript(LOTS_DATA_ID, root);
     if (Array.isArray(aggregate)) {
       lots = lots.concat(aggregate);
     } else if (aggregate && Array.isArray(aggregate.lots)) {
       lots = lots.concat(aggregate.lots);
     }
 
-    document.querySelectorAll(".dr-lots-json,.dr-lot-json").forEach(function (node) {
+    root.querySelectorAll(".dr-lots-json,.dr-lot-json").forEach(function (node) {
       var parsed = parseJsonNode(node);
       if (!parsed) return;
       if (Array.isArray(parsed)) {
@@ -944,8 +1074,9 @@
     };
   }
 
-  function parseJsonScript(id) {
-    var node = document.getElementById(id);
+  function parseJsonScript(id, root) {
+    root = root || document;
+    var node = root.getElementById ? root.getElementById(id) : root.querySelector("#" + id);
     return parseJsonNode(node);
   }
 

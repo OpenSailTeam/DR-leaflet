@@ -13,6 +13,13 @@ Public browser runtime for the Discovery Ridge lot map. This repository is inten
 
 The browser receives lot data from hidden Webflow CMS JSON rendered on the page. It does not call the Webflow API and must not contain Webflow API tokens.
 
+For 100+ lots, use Webflow's native Collection List pagination on the hidden
+Lots JSON list. The runtime automatically follows same-origin Webflow
+`.w-pagination-next` links on load, fetches each paginated page as HTML, parses
+only `.dr-lot-json` / `.dr-lots-json` script tags, and dedupes lots by `slug` or
+`svgId` before binding the SVG. Pagination can be disabled with
+`data-load-paginated-lots="false"` on `#dr-lot-map`.
+
 Each public lot JSON object should include:
 
 ```json
