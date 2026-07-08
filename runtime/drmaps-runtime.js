@@ -426,39 +426,10 @@
   }
 
   function bindLotEvents(state, config) {
-    var popup = null;
-    var activeShape = null;
-
-    function ensurePopup() {
-      if (popup) return popup;
-      popup = window.L.popup({
-        closeButton: true,
-        autoPan: true,
-        offset: [0, -10],
-        className: "dr-lot-popup-shell",
-      });
-      popup.on("remove", function () {
-        if (activeShape) activeShape.classList.remove("is-active");
-        activeShape = null;
-      });
-      state.popup = popup;
-      return popup;
-    }
+    var card = createLotCardController(state, config);
 
     function openShape(shape, lot, lock) {
-      var center = getShapeCenter(shape);
-      if (!center) return false;
-      ensurePopup()
-        .setLatLng(window.L.latLng(center.y, center.x))
-        .setContent(buildPopupHtml(lot, config))
-        .openOn(state.map);
-
-      if (lock) {
-        if (activeShape && activeShape !== shape) activeShape.classList.remove("is-active");
-        activeShape = shape;
-        shape.classList.add("is-active");
-      }
-      return true;
+      return card.show(shape, lot, { pinned: !!lock });
     }
 
     state.openLotBySlug = function openLotBySlug(slug) {
@@ -487,12 +458,15 @@
       var shape = getShapeForLot(state, lot);
       if (!shape || !lot || shape.getAttribute("data-dr-events-bound") === "true") return;
       shape.setAttribute("data-dr-events-bound", "true");
+      shape.setAttribute("aria-expanded", "false");
 
       shape.addEventListener("mouseenter", function () {
         shape.classList.add("is-hovered");
+        card.show(shape, lot, { pinned: false });
       });
       shape.addEventListener("mouseleave", function () {
         shape.classList.remove("is-hovered");
+        card.scheduleHoverClose(shape);
       });
       shape.addEventListener("click", function (event) {
         event.preventDefault();
@@ -507,8 +481,197 @@
     });
 
     state.map.on("click", function () {
-      if (popup) state.map.closePopup(popup);
+      card.close();
     });
+  }
+
+  function createLotCardController(state, config) {
+    var mapEl = state.mapEl;
+    var shell = document.createElement("div");
+    var activeShape = null;
+    var hoverShape = null;
+    var currentShape = null;
+    var currentLot = null;
+    var isPinned = false;
+    var cardHovered = false;
+    var closeTimer = null;
+
+    shell.className = "dr-lot-card-shell";
+    shell.hidden = true;
+    shell.setAttribute("aria-live", "polite");
+    mapEl.appendChild(shell);
+
+    if (window.L && window.L.DomEvent) {
+      window.L.DomEvent.disableClickPropagation(shell);
+      window.L.DomEvent.disableScrollPropagation(shell);
+    }
+
+    shell.addEventListener("mouseenter", function () {
+      cardHovered = true;
+      clearCloseTimer();
+    });
+
+    shell.addEventListener("mouseleave", function () {
+      cardHovered = false;
+      if (!isPinned) scheduleHoverClose(currentShape);
+    });
+
+    shell.addEventListener("click", function (event) {
+      var closeButton = event.target.closest("[data-dr-card-close]");
+      if (!closeButton) return;
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") close();
+    });
+
+    state.map.on("move zoom resize", function () {
+      position();
+    });
+
+    function show(shape, lot, options) {
+      if (!shape || !lot) return false;
+      options = options || {};
+      if (isPinned && !options.pinned) return true;
+
+      clearCloseTimer();
+      var previousShape = currentShape;
+      isPinned = !!options.pinned;
+      currentShape = shape;
+      currentLot = lot;
+      hoverShape = isPinned ? null : shape;
+
+      if (previousShape && previousShape !== shape && previousShape !== activeShape) {
+        setShapeExpanded(previousShape, false);
+      }
+
+      if (isPinned) {
+        setActiveShape(shape);
+      }
+
+      shell.innerHTML = buildLotCardHtml(lot, config);
+      shell.hidden = false;
+      shell.style.visibility = "hidden";
+      shell.classList.toggle("is-pinned", isPinned);
+      shell.dataset.drLotSlug = lot.slug || "";
+      shell.dataset.drSvgId = lot.svgId || "";
+
+      var image = shell.querySelector("img");
+      if (image) {
+        image.addEventListener("load", position, { once: true });
+        image.addEventListener("error", position, { once: true });
+      }
+
+      setShapeExpanded(shape, true);
+      position();
+      if (window.requestAnimationFrame) window.requestAnimationFrame(position);
+      return true;
+    }
+
+    function scheduleHoverClose(shape) {
+      if (isPinned || shape !== hoverShape) return;
+      clearCloseTimer();
+      closeTimer = window.setTimeout(function () {
+        if (!isPinned && !cardHovered) closeHover(shape);
+      }, 120);
+    }
+
+    function closeHover(shape) {
+      if (shape && shape !== hoverShape) return;
+      close();
+    }
+
+    function close() {
+      clearCloseTimer();
+      if (activeShape) {
+        activeShape.classList.remove("is-active");
+        setShapeExpanded(activeShape, false);
+      }
+      if (currentShape && currentShape !== activeShape) setShapeExpanded(currentShape, false);
+      activeShape = null;
+      hoverShape = null;
+      currentShape = null;
+      currentLot = null;
+      isPinned = false;
+      cardHovered = false;
+      shell.hidden = true;
+      shell.removeAttribute("data-placement");
+      shell.removeAttribute("data-dr-lot-slug");
+      shell.removeAttribute("data-dr-svg-id");
+      shell.innerHTML = "";
+    }
+
+    function position() {
+      if (shell.hidden || !currentShape || !currentLot || !state.map) return;
+      var point = getShapeContainerPoint(mapEl, currentShape);
+      if (!point) return;
+      var mapWidth = mapEl.clientWidth || 0;
+      var mapHeight = mapEl.clientHeight || 0;
+      if (!mapWidth || !mapHeight) return;
+
+      var margin = 12;
+      var offset = 18;
+      var maxHeight = Math.max(160, mapHeight - margin * 2);
+      shell.style.maxHeight = maxHeight + "px";
+
+      var cardWidth = shell.offsetWidth || 340;
+      var cardHeight = Math.min(shell.offsetHeight || 280, maxHeight);
+      var placement = "right";
+      var left = point.x + offset;
+
+      if (left + cardWidth + margin > mapWidth) {
+        left = point.x - cardWidth - offset;
+        placement = "left";
+      }
+
+      if (left < margin || left + cardWidth + margin > mapWidth) {
+        left = clamp(point.x - cardWidth / 2, margin, Math.max(margin, mapWidth - cardWidth - margin));
+        placement = "center";
+      }
+
+      var top = clamp(point.y - cardHeight / 2, margin, Math.max(margin, mapHeight - cardHeight - margin));
+      var arrowY = clamp(point.y - top, 28, Math.max(28, cardHeight - 28));
+
+      shell.dataset.placement = placement;
+      shell.style.left = Math.round(left) + "px";
+      shell.style.top = Math.round(top) + "px";
+      shell.style.setProperty("--dr-card-arrow-y", Math.round(arrowY) + "px");
+      shell.style.visibility = "visible";
+    }
+
+    function setActiveShape(shape) {
+      if (activeShape && activeShape !== shape) {
+        activeShape.classList.remove("is-active");
+        setShapeExpanded(activeShape, false);
+      }
+      activeShape = shape;
+      activeShape.classList.add("is-active");
+    }
+
+    function clearCloseTimer() {
+      if (!closeTimer) return;
+      window.clearTimeout(closeTimer);
+      closeTimer = null;
+    }
+
+    function setShapeExpanded(shape, expanded) {
+      if (shape) shape.setAttribute("aria-expanded", expanded ? "true" : "false");
+    }
+
+    state.cardController = {
+      show: show,
+      close: close,
+      position: position,
+    };
+
+    return {
+      show: show,
+      close: close,
+      scheduleHoverClose: scheduleHoverClose,
+    };
   }
 
   function addStatusDots(state, config) {
@@ -637,13 +800,13 @@
     }, 0);
   }
 
-  function buildPopupHtml(lot, config) {
+  function buildLotCardHtml(lot, config) {
     var status = getStatusMeta(lot.status, config);
     var imageUrl = safeImageUrl(lot.imageUrl);
     var buttonUrl = safePublicUrl(lot.buttonUrl);
     var title = lot.name || lot.slug || "Lot";
+    var initial = title.trim().charAt(0).toUpperCase() || "L";
     var rows = [
-      ["Status", lot.status],
       ["Lot", joinParts([lot.lotNumber, lot.block ? "Block " + lot.block : ""])],
       ["Width", lot.width],
       ["Depth", lot.depth],
@@ -652,21 +815,29 @@
       ["Builder", lot.builder],
     ];
 
-    var html = '<article class="dr-lot-popup">';
+    var html =
+      '<article class="dr-lot-card" style="--dr-status-color:' +
+      escapeAttr(status.color || "#4fa5cc") +
+      '" aria-label="' +
+      escapeAttr(title) +
+      '">';
+    html += '<button type="button" class="dr-lot-card__close" data-dr-card-close aria-label="Close lot details">x</button>';
+    html += '<div class="dr-lot-card__media">';
     if (imageUrl) {
-      html += '<img class="dr-lot-popup__image" src="' + escapeAttr(imageUrl) + '" alt="' + escapeAttr(title) + '" loading="lazy">';
+      html += '<img class="dr-lot-card__image" src="' + escapeAttr(imageUrl) + '" alt="' + escapeAttr(title) + '" loading="lazy">';
+    } else {
+      html += '<span class="dr-lot-card__avatar" aria-hidden="true">' + escapeHtml(initial) + "</span>";
     }
-    html += '<div class="dr-lot-popup__body">';
-    html += '<h3 class="dr-lot-popup__title">' + escapeHtml(title) + "</h3>";
+    html += "</div>";
+    html += '<div class="dr-lot-card__body">';
     if (lot.status) {
       html +=
-        '<div class="dr-lot-popup__status" style="--dr-status-color:' +
-        escapeAttr(status.color || "#667085") +
-        '">' +
+        '<div class="dr-lot-card__status"><span class="dr-lot-card__dot" aria-hidden="true"></span>' +
         escapeHtml(lot.status) +
         "</div>";
     }
-    html += '<dl class="dr-lot-popup__details">';
+    html += '<h3 class="dr-lot-card__title">' + escapeHtml(title) + "</h3>";
+    html += '<dl class="dr-lot-card__details">';
     rows.forEach(function (row) {
       if (!row[1]) return;
       html += "<div><dt>" + escapeHtml(row[0]) + "</dt><dd>" + escapeHtml(row[1]) + "</dd></div>";
@@ -675,7 +846,7 @@
     if (buttonUrl && lot.buttonText) {
       var external = /^https?:/i.test(buttonUrl);
       html +=
-        '<a class="dr-lot-popup__cta" href="' +
+        '<a class="dr-lot-card__cta" href="' +
         escapeAttr(buttonUrl) +
         '"' +
         (external ? ' target="_blank" rel="noopener noreferrer"' : "") +
@@ -769,6 +940,17 @@
     } catch (err) {
       return null;
     }
+  }
+
+  function getShapeContainerPoint(mapEl, shape) {
+    if (!mapEl || !shape || typeof shape.getBoundingClientRect !== "function") return null;
+    var mapRect = mapEl.getBoundingClientRect();
+    var shapeRect = shape.getBoundingClientRect();
+    if (!shapeRect.width && !shapeRect.height) return null;
+    return {
+      x: shapeRect.left - mapRect.left + shapeRect.width / 2,
+      y: shapeRect.top - mapRect.top + shapeRect.height / 2,
+    };
   }
 
   function parseJsonScript(id) {
@@ -895,6 +1077,10 @@
       .join(" ");
   }
 
+  function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+  }
+
   function prefersReducedMotion() {
     return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   }
@@ -908,8 +1094,41 @@
     if (document.getElementById("drmaps-base-styles")) return;
     var style = document.createElement("style");
     style.id = "drmaps-base-styles";
-    style.textContent =
-      ".dr-map{position:relative;background:#f8fafc}.dr-lot{cursor:pointer;pointer-events:all;transition:opacity 120ms ease,stroke-width 120ms ease}.dr-lot.is-hovered,.dr-lot.is-active{stroke:#111827!important;stroke-width:6!important;opacity:.92}.dr-lot-popup-shell .leaflet-popup-content{margin:0}.dr-lot-popup{width:min(280px,72vw);font:14px/1.4 Arial,sans-serif;color:#1f2937;background:#fff;border-radius:6px;overflow:hidden}.dr-lot-popup__image{display:block;width:100%;height:110px;object-fit:cover;background:#eef2f7}.dr-lot-popup__body{padding:14px}.dr-lot-popup__title{margin:0 0 8px;font-size:18px;line-height:1.2;color:#111827}.dr-lot-popup__status{display:inline-flex;align-items:center;gap:6px;margin:0 0 10px;font-weight:700;text-transform:uppercase;color:var(--dr-status-color)}.dr-lot-popup__status:before{content:\"\";width:9px;height:9px;border-radius:999px;background:var(--dr-status-color)}.dr-lot-popup__details{display:grid;gap:4px;margin:0}.dr-lot-popup__details div{display:grid;grid-template-columns:74px minmax(0,1fr);gap:8px}.dr-lot-popup__details dt{font-weight:700;color:#475467}.dr-lot-popup__details dd{margin:0;color:#111827}.dr-lot-popup__cta{display:block;margin-top:12px;padding:9px 12px;border-radius:4px;background:#4fa5cc;color:#fff!important;text-align:center;text-decoration:none;font-weight:700}.dr-map-legend{padding:10px 12px;border-radius:6px;background:rgba(255,255,255,.94);box-shadow:0 8px 24px rgba(15,23,42,.18);font:13px/1.35 Arial,sans-serif;color:#1f2937}.dr-map-legend__title{display:block;width:100%;padding:0;margin:0 0 7px;border:0;background:transparent;text-align:left;font-weight:700;cursor:pointer}.dr-map-legend__body{display:grid;gap:6px}.dr-map-legend__item{display:flex;align-items:center;gap:7px}.dr-map-legend__swatch{display:inline-block;width:11px;height:11px;border-radius:999px;border:1px solid rgba(0,0,0,.14)}";
+    style.textContent = [
+      ".dr-map{position:relative;overflow:hidden;background:#f8fafc}",
+      ".dr-lot{cursor:pointer;pointer-events:all;transition:opacity 120ms ease,stroke-width 120ms ease}",
+      ".dr-lot.is-hovered{stroke:#0f172a!important;stroke-width:5!important;opacity:.96}",
+      ".dr-lot.is-active{stroke:#0f172a!important;stroke-width:7!important;opacity:1}",
+      ".dr-lot-card-shell{position:absolute;z-index:800;width:min(360px,calc(100% - 24px));max-height:calc(100% - 24px);font:14px/1.4 Arial,sans-serif;color:#1f2937;pointer-events:auto;filter:drop-shadow(0 18px 30px rgba(15,23,42,.22))}",
+      ".dr-lot-card-shell[hidden]{display:none!important}",
+      ".dr-lot-card-shell:before{content:\"\";position:absolute;top:var(--dr-card-arrow-y,50%);width:14px;height:14px;background:#fff;border:1px solid rgba(15,23,42,.12);transform:translateY(-50%) rotate(45deg);z-index:0}",
+      ".dr-lot-card-shell[data-placement=\"right\"]:before{left:-7px;border-top:0;border-right:0}",
+      ".dr-lot-card-shell[data-placement=\"left\"]:before{right:-7px;border-bottom:0;border-left:0}",
+      ".dr-lot-card-shell[data-placement=\"center\"]:before{display:none}",
+      ".dr-lot-card{position:relative;z-index:1;max-height:inherit;overflow:auto;background:#fff;border:1px solid rgba(15,23,42,.12);border-radius:8px;box-shadow:inset 0 4px 0 var(--dr-status-color,#4fa5cc)}",
+      ".dr-lot-card__close{position:absolute;top:10px;right:10px;z-index:3;width:30px;height:30px;border:1px solid rgba(15,23,42,.12);border-radius:999px;background:rgba(255,255,255,.94);color:#0f172a;font:700 15px/1 Arial,sans-serif;cursor:pointer}",
+      ".dr-lot-card__close:hover,.dr-lot-card__close:focus{outline:0;border-color:var(--dr-status-color,#4fa5cc);box-shadow:0 0 0 3px rgba(79,165,204,.2)}",
+      ".dr-lot-card__media{position:relative;height:48px;background:linear-gradient(135deg,rgba(15,23,42,.08),rgba(79,165,204,.16))}",
+      ".dr-lot-card__image,.dr-lot-card__avatar{position:absolute;left:22px;top:18px;width:82px;height:82px;border-radius:999px;border:4px solid #fff;box-shadow:0 10px 20px rgba(15,23,42,.18);background:#eef2f7}",
+      ".dr-lot-card__image{display:block;object-fit:cover}",
+      ".dr-lot-card__avatar{display:grid;place-items:center;background:var(--dr-status-color,#4fa5cc);color:#fff;font-size:30px;font-weight:700}",
+      ".dr-lot-card__body{padding:58px 22px 22px}",
+      ".dr-lot-card__status{display:inline-flex;align-items:center;gap:7px;margin:0 0 8px;color:var(--dr-status-color,#4fa5cc);font-size:12px;font-weight:800;text-transform:uppercase}",
+      ".dr-lot-card__dot{width:9px;height:9px;border-radius:999px;background:var(--dr-status-color,#4fa5cc);box-shadow:0 0 0 3px rgba(15,23,42,.06)}",
+      ".dr-lot-card__title{margin:0 0 14px;color:#0f172a;font-size:22px;line-height:1.15;font-weight:800;letter-spacing:0}",
+      ".dr-lot-card__details{display:grid;gap:8px;margin:0}",
+      ".dr-lot-card__details div{display:grid;grid-template-columns:82px minmax(0,1fr);gap:12px;align-items:start}",
+      ".dr-lot-card__details dt{color:#64748b;font-weight:700}",
+      ".dr-lot-card__details dd{margin:0;color:#111827;font-weight:700;overflow-wrap:anywhere}",
+      ".dr-lot-card__cta{display:block;margin-top:18px;padding:11px 14px;border:1px solid var(--dr-status-color,#4fa5cc);border-radius:6px;background:var(--dr-status-color,#4fa5cc);color:#fff!important;text-align:center;text-decoration:none;font-weight:800}",
+      ".dr-lot-card__cta:hover,.dr-lot-card__cta:focus{filter:brightness(.94);outline:0;box-shadow:0 0 0 3px rgba(79,165,204,.22)}",
+      ".dr-map-legend{padding:10px 12px;border-radius:6px;background:rgba(255,255,255,.94);box-shadow:0 8px 24px rgba(15,23,42,.18);font:13px/1.35 Arial,sans-serif;color:#1f2937}",
+      ".dr-map-legend__title{display:block;width:100%;padding:0;margin:0 0 7px;border:0;background:transparent;text-align:left;font-weight:700;cursor:pointer}",
+      ".dr-map-legend__body{display:grid;gap:6px}",
+      ".dr-map-legend__item{display:flex;align-items:center;gap:7px}",
+      ".dr-map-legend__swatch{display:inline-block;width:11px;height:11px;border-radius:999px;border:1px solid rgba(0,0,0,.14)}",
+      "@media(max-width:640px){.dr-lot-card-shell{width:calc(100% - 24px)}.dr-lot-card__title{font-size:19px}.dr-lot-card__details div{grid-template-columns:72px minmax(0,1fr)}}",
+    ].join("");
     (document.head || document.documentElement).appendChild(style);
   }
 
