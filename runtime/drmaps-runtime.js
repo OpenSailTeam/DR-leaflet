@@ -427,10 +427,10 @@
   }
 
   function bindLotEvents(state, config) {
-    var card = createLotCardController(state, config);
+    var popup = createLotPopupController(state, config);
 
     function openShape(shape, lot, lock) {
-      return card.show(shape, lot, { pinned: !!lock });
+      return popup.open(shape, lot, !!lock);
     }
 
     state.openLotBySlug = function openLotBySlug(slug) {
@@ -463,257 +463,186 @@
 
       shape.addEventListener("mouseenter", function () {
         shape.classList.add("is-hovered");
-        card.show(shape, lot, { pinned: false });
+        popup.onShapeEnter(shape, lot);
       });
       shape.addEventListener("mouseleave", function () {
         shape.classList.remove("is-hovered");
-        card.scheduleHoverClose(shape);
+        popup.onShapeLeave(shape);
       });
       shape.addEventListener("click", function (event) {
         event.preventDefault();
         event.stopPropagation();
-        openShape(shape, lot, true);
+        popup.toggle(shape, lot);
       });
       shape.addEventListener("keydown", function (event) {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
-        openShape(shape, lot, true);
+        popup.toggle(shape, lot);
       });
     });
 
     state.map.on("click", function () {
-      card.close();
+      popup.close();
     });
   }
 
-  function createLotCardController(state, config) {
-    var mapEl = state.mapEl;
-    var shell = document.createElement("div");
-    var activeShape = null;
-    var hoverShape = null;
-    var currentShape = null;
-    var currentLot = null;
-    var isPinned = false;
-    var cardHovered = false;
-    var closeTimer = null;
-    var hoverSwitchTimer = null;
-    var pendingHover = null;
-    var hoverSwitchDelay = 110;
+  function createLotPopupController(state, config) {
+    var lockedShape = null;
+    var hoveredShape = null;
+    var overPopup = false;
+    var hideTimer = null;
+    var boundPopupEl = null;
+    var popup = null;
+    var HIDE_DELAY_MS = 120;
 
-    shell.className = "dr-lot-card-shell";
-    shell.hidden = true;
-    shell.setAttribute("aria-live", "polite");
-    mapEl.appendChild(shell);
-
-    if (window.L && window.L.DomEvent) {
-      window.L.DomEvent.disableClickPropagation(shell);
-      window.L.DomEvent.disableScrollPropagation(shell);
+    function clearHideTimer() {
+      if (!hideTimer) return;
+      window.clearTimeout(hideTimer);
+      hideTimer = null;
     }
 
-    shell.addEventListener("mouseenter", function () {
-      cardHovered = true;
-      clearCloseTimer();
-    });
+    function onPopupMouseEnter() {
+      overPopup = true;
+      clearHideTimer();
+    }
 
-    shell.addEventListener("mouseleave", function () {
-      cardHovered = false;
-      if (!isPinned) scheduleHoverClose(currentShape);
-    });
+    function onPopupMouseLeave() {
+      overPopup = false;
+      scheduleHide();
+    }
 
-    shell.addEventListener("click", function (event) {
-      var closeButton = event.target.closest("[data-dr-card-close]");
-      if (!closeButton) return;
-      event.preventDefault();
-      event.stopPropagation();
-      close();
-    });
+    function getActivePopupElement() {
+      if (!popup || typeof popup.getElement !== "function") return null;
+      return popup.getElement();
+    }
 
-    document.addEventListener("keydown", function (event) {
-      if (event.key === "Escape") close();
-    });
+    function bindPopupHoverHandlers() {
+      var popupEl = getActivePopupElement();
+      if (!popupEl || popupEl === boundPopupEl) return;
+      if (boundPopupEl) {
+        boundPopupEl.removeEventListener("mouseenter", onPopupMouseEnter);
+        boundPopupEl.removeEventListener("mouseleave", onPopupMouseLeave);
+      }
+      boundPopupEl = popupEl;
+      popupEl.addEventListener("mouseenter", onPopupMouseEnter);
+      popupEl.addEventListener("mouseleave", onPopupMouseLeave);
+    }
 
-    state.map.on("move zoom resize", function () {
-      position();
-    });
+    function ensurePopup() {
+      if (popup) return popup;
+      popup = window.L.popup({
+        closeButton: false,
+        autoPan: true,
+        offset: [0, -8],
+        className: "dr-lot-popup-shell",
+      });
+      popup.on("remove", function () {
+        if (boundPopupEl) {
+          boundPopupEl.removeEventListener("mouseenter", onPopupMouseEnter);
+          boundPopupEl.removeEventListener("mouseleave", onPopupMouseLeave);
+          boundPopupEl = null;
+        }
+        overPopup = false;
+        if (lockedShape) {
+          lockedShape.classList.remove("is-active");
+          setShapeExpanded(lockedShape, false);
+        }
+        lockedShape = null;
+      });
+      state.popup = popup;
+      return popup;
+    }
 
-    function show(shape, lot, options) {
+    function open(shape, lot, lock) {
       if (!shape || !lot) return false;
-      options = options || {};
-      if (options.pinned) {
-        clearPendingHover();
-        return showNow(shape, lot, true);
-      }
-      if (isPinned) return true;
-      if (!currentShape || currentShape === shape || shell.hidden) {
-        clearPendingHover();
-        return showNow(shape, lot, false);
-      }
-      return scheduleHoverSwitch(shape, lot);
-    }
-
-    function showNow(shape, lot, pinned) {
-      clearCloseTimer();
-      var previousShape = currentShape;
-      isPinned = !!pinned;
-      currentShape = shape;
-      currentLot = lot;
-      hoverShape = isPinned ? null : shape;
-
-      if (previousShape && previousShape !== shape && previousShape !== activeShape) {
-        setShapeExpanded(previousShape, false);
-      }
-
-      if (isPinned) {
-        setActiveShape(shape);
-      }
-
-      shell.innerHTML = buildLotCardHtml(lot, config);
-      shell.hidden = false;
-      shell.style.visibility = "hidden";
-      shell.classList.toggle("is-pinned", isPinned);
-      shell.dataset.drLotSlug = lot.slug || "";
-      shell.dataset.drSvgId = lot.svgId || "";
-
-      var image = shell.querySelector("img");
-      if (image) {
-        image.addEventListener("load", position, { once: true });
-        image.addEventListener("error", position, { once: true });
-      }
-
+      clearHideTimer();
+      ensurePopup()
+        .setLatLng(getPopupLatLng(shape, state.map))
+        .setContent(buildLotCardHtml(lot, config))
+        .openOn(state.map);
+      bindPopupHoverHandlers();
+      if (!boundPopupEl) window.setTimeout(bindPopupHoverHandlers, 0);
       setShapeExpanded(shape, true);
-      position();
-      if (window.requestAnimationFrame) window.requestAnimationFrame(position);
-      return true;
-    }
 
-    function scheduleHoverSwitch(shape, lot) {
-      clearCloseTimer();
-      if (pendingHover && pendingHover.shape === shape) return true;
-      clearPendingHover();
-      pendingHover = { shape: shape, lot: lot };
-      hoverSwitchTimer = window.setTimeout(function () {
-        var pending = pendingHover;
-        clearPendingHover();
-        if (!pending || isPinned) return;
-        showNow(pending.shape, pending.lot, false);
-      }, hoverSwitchDelay);
-      return true;
-    }
-
-    function scheduleHoverClose(shape) {
-      if (pendingHover && pendingHover.shape === shape) {
-        clearPendingHover();
-        if (!isPinned && currentShape && !cardHovered) scheduleHoverClose(currentShape);
-        return;
+      if (lock) {
+        if (lockedShape && lockedShape !== shape) {
+          lockedShape.classList.remove("is-active");
+          setShapeExpanded(lockedShape, false);
+        }
+        lockedShape = shape;
+        shape.classList.add("is-active");
       }
-      if (isPinned || shape !== hoverShape) return;
-      clearCloseTimer();
-      closeTimer = window.setTimeout(function () {
-        if (!isPinned && !cardHovered) closeHover(shape);
-      }, 120);
+
+      return true;
     }
 
-    function closeHover(shape) {
-      if (shape && shape !== hoverShape) return;
-      close();
+    function onShapeEnter(shape, lot) {
+      hoveredShape = shape;
+      clearHideTimer();
+      if (lockedShape && lockedShape !== shape) return true;
+      return open(shape, lot, false);
+    }
+
+    function onShapeLeave(shape) {
+      if (hoveredShape === shape) hoveredShape = null;
+      if (shape && shape !== lockedShape) setShapeExpanded(shape, false);
+      scheduleHide();
+    }
+
+    function toggle(shape, lot) {
+      clearHideTimer();
+      if (lockedShape === shape) {
+        shape.classList.remove("is-active");
+        setShapeExpanded(shape, false);
+        lockedShape = null;
+        closePopupNow();
+        return true;
+      }
+      return open(shape, lot, true);
+    }
+
+    function scheduleHide() {
+      clearHideTimer();
+      hideTimer = window.setTimeout(function () {
+        hideTimer = null;
+        if (lockedShape || hoveredShape || overPopup) return;
+        closePopupNow();
+      }, HIDE_DELAY_MS);
+    }
+
+    function closePopupNow() {
+      clearHideTimer();
+      overPopup = false;
+      if (popup) state.map.closePopup(popup);
     }
 
     function close() {
-      clearCloseTimer();
-      clearPendingHover();
-      if (activeShape) {
-        activeShape.classList.remove("is-active");
-        setShapeExpanded(activeShape, false);
+      clearHideTimer();
+      hoveredShape = null;
+      overPopup = false;
+      if (lockedShape) {
+        lockedShape.classList.remove("is-active");
+        setShapeExpanded(lockedShape, false);
       }
-      if (currentShape && currentShape !== activeShape) setShapeExpanded(currentShape, false);
-      activeShape = null;
-      hoverShape = null;
-      currentShape = null;
-      currentLot = null;
-      isPinned = false;
-      cardHovered = false;
-      shell.hidden = true;
-      shell.removeAttribute("data-placement");
-      shell.removeAttribute("data-dr-lot-slug");
-      shell.removeAttribute("data-dr-svg-id");
-      shell.innerHTML = "";
-    }
-
-    function position() {
-      if (shell.hidden || !currentShape || !currentLot || !state.map) return;
-      var point = getShapeContainerPoint(mapEl, currentShape);
-      if (!point) return;
-      var mapWidth = mapEl.clientWidth || 0;
-      var mapHeight = mapEl.clientHeight || 0;
-      if (!mapWidth || !mapHeight) return;
-
-      var margin = 12;
-      var offset = 18;
-      var maxHeight = Math.max(160, mapHeight - margin * 2);
-      shell.style.maxHeight = maxHeight + "px";
-
-      var cardWidth = shell.offsetWidth || 340;
-      var cardHeight = Math.min(shell.offsetHeight || 280, maxHeight);
-      var placement = "right";
-      var left = point.x + offset;
-
-      if (left + cardWidth + margin > mapWidth) {
-        left = point.x - cardWidth - offset;
-        placement = "left";
-      }
-
-      if (left < margin || left + cardWidth + margin > mapWidth) {
-        left = clamp(point.x - cardWidth / 2, margin, Math.max(margin, mapWidth - cardWidth - margin));
-        placement = "center";
-      }
-
-      var top = clamp(point.y - cardHeight / 2, margin, Math.max(margin, mapHeight - cardHeight - margin));
-      var arrowY = clamp(point.y - top, 28, Math.max(28, cardHeight - 28));
-
-      shell.dataset.placement = placement;
-      shell.style.left = Math.round(left) + "px";
-      shell.style.top = Math.round(top) + "px";
-      shell.style.setProperty("--dr-card-arrow-y", Math.round(arrowY) + "px");
-      shell.style.visibility = "visible";
-    }
-
-    function setActiveShape(shape) {
-      if (activeShape && activeShape !== shape) {
-        activeShape.classList.remove("is-active");
-        setShapeExpanded(activeShape, false);
-      }
-      activeShape = shape;
-      activeShape.classList.add("is-active");
-    }
-
-    function clearCloseTimer() {
-      if (!closeTimer) return;
-      window.clearTimeout(closeTimer);
-      closeTimer = null;
-    }
-
-    function clearPendingHover() {
-      if (hoverSwitchTimer) {
-        window.clearTimeout(hoverSwitchTimer);
-        hoverSwitchTimer = null;
-      }
-      pendingHover = null;
+      lockedShape = null;
+      closePopupNow();
     }
 
     function setShapeExpanded(shape, expanded) {
       if (shape) shape.setAttribute("aria-expanded", expanded ? "true" : "false");
     }
 
-    state.cardController = {
-      show: show,
+    state.popupController = {
+      open: open,
       close: close,
-      position: position,
     };
 
     return {
-      show: show,
+      open: open,
       close: close,
-      scheduleHoverClose: scheduleHoverClose,
+      onShapeEnter: onShapeEnter,
+      onShapeLeave: onShapeLeave,
+      toggle: toggle,
     };
   }
 
@@ -864,7 +793,6 @@
       '" aria-label="' +
       escapeAttr(title) +
       '">';
-    html += '<button type="button" class="dr-lot-card__close" data-dr-card-close aria-label="Close lot details">x</button>';
     html += '<div class="dr-lot-card__media">';
     if (imageUrl) {
       html += '<img class="dr-lot-card__image" src="' + escapeAttr(imageUrl) + '" alt="' + escapeAttr(title) + '" loading="lazy">';
@@ -983,6 +911,26 @@
     } catch (err) {
       return null;
     }
+  }
+
+  function getPopupLatLng(shape, map) {
+    try {
+      var rect = shape.getBoundingClientRect();
+      var containerRect = map.getContainer().getBoundingClientRect();
+      var offset = -20;
+      var x = rect.left - containerRect.left + rect.width / 2;
+      var y = rect.top - containerRect.top - offset;
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        return map.containerPointToLatLng([x, y]);
+      }
+    } catch (err) {
+      // Fall through to SVG-space center.
+    }
+    var center = getShapeCenter(shape);
+    if (center && Number.isFinite(center.x) && Number.isFinite(center.y)) {
+      return window.L.latLng(center.y, center.x);
+    }
+    return map.getCenter();
   }
 
   function getShapeContainerPoint(mapEl, shape) {
@@ -1138,19 +1086,14 @@
     var style = document.createElement("style");
     style.id = "drmaps-base-styles";
     style.textContent = [
-      ".dr-map{position:relative;overflow:hidden;background:#f8fafc}",
-      ".dr-lot{cursor:pointer;pointer-events:all;transition:opacity 120ms ease,stroke-width 120ms ease}",
-      ".dr-lot.is-hovered{stroke:#0f172a!important;stroke-width:5!important;opacity:.96}",
-      ".dr-lot.is-active{stroke:#0f172a!important;stroke-width:7!important;opacity:1}",
-      ".dr-lot-card-shell{position:absolute;z-index:800;width:min(360px,calc(100% - 24px));max-height:calc(100% - 24px);font:14px/1.4 Arial,sans-serif;color:#1f2937;pointer-events:auto;filter:drop-shadow(0 18px 30px rgba(15,23,42,.22))}",
-      ".dr-lot-card-shell[hidden]{display:none!important}",
-      ".dr-lot-card-shell:before{content:\"\";position:absolute;top:var(--dr-card-arrow-y,50%);width:14px;height:14px;background:#fff;border:1px solid rgba(15,23,42,.12);transform:translateY(-50%) rotate(45deg);z-index:0}",
-      ".dr-lot-card-shell[data-placement=\"right\"]:before{left:-7px;border-top:0;border-right:0}",
-      ".dr-lot-card-shell[data-placement=\"left\"]:before{right:-7px;border-bottom:0;border-left:0}",
-      ".dr-lot-card-shell[data-placement=\"center\"]:before{display:none}",
-      ".dr-lot-card{position:relative;z-index:1;max-height:inherit;overflow:auto;background:#fff;border:1px solid rgba(15,23,42,.12);border-radius:8px;box-shadow:inset 0 4px 0 var(--dr-status-color,#4fa5cc)}",
-      ".dr-lot-card__close{position:absolute;top:10px;right:10px;z-index:3;width:30px;height:30px;border:1px solid rgba(15,23,42,.12);border-radius:999px;background:rgba(255,255,255,.94);color:#0f172a;font:700 15px/1 Arial,sans-serif;cursor:pointer}",
-      ".dr-lot-card__close:hover,.dr-lot-card__close:focus{outline:0;border-color:var(--dr-status-color,#4fa5cc);box-shadow:0 0 0 3px rgba(79,165,204,.2)}",
+      ".dr-map{--lot-hover-fill:#f7d154;--lot-active-fill:#ffb703;--lot-stroke:#333333;--lot-stroke-width:1.5;position:relative;overflow:hidden;background:#f5f4f2}",
+      ".dr-map svg .dr-lot{cursor:pointer;pointer-events:all;transition:fill .15s ease,stroke .15s ease,opacity .15s ease}",
+      ".dr-map svg .dr-lot.is-hovered{fill:var(--lot-hover-fill)!important;stroke:var(--lot-stroke)!important;stroke-width:var(--lot-stroke-width)!important}",
+      ".dr-map svg .dr-lot.is-active{fill:var(--lot-active-fill)!important;stroke:var(--lot-stroke)!important;stroke-width:calc(var(--lot-stroke-width) + .5)!important}",
+      ".dr-lot-popup-shell .leaflet-popup-content-wrapper{padding:0;border-radius:8px;overflow:hidden}",
+      ".dr-lot-popup-shell .leaflet-popup-content{margin:0;width:auto!important}",
+      ".dr-lot-popup-shell .leaflet-popup-tip{background:#fff}",
+      ".dr-lot-card{position:relative;width:min(340px,calc(100vw - 48px));max-height:min(520px,calc(100vh - 120px));overflow:auto;background:#fff;border:1px solid rgba(15,23,42,.12);border-radius:8px;box-shadow:inset 0 4px 0 var(--dr-status-color,#4fa5cc);font:14px/1.4 Arial,sans-serif;color:#1f2937}",
       ".dr-lot-card__media{position:relative;height:48px;background:linear-gradient(135deg,rgba(15,23,42,.08),rgba(79,165,204,.16))}",
       ".dr-lot-card__image,.dr-lot-card__avatar{position:absolute;left:22px;top:18px;width:82px;height:82px;border-radius:999px;border:4px solid #fff;box-shadow:0 10px 20px rgba(15,23,42,.18);background:#eef2f7}",
       ".dr-lot-card__image{display:block;object-fit:cover}",
@@ -1170,7 +1113,7 @@
       ".dr-map-legend__body{display:grid;gap:6px}",
       ".dr-map-legend__item{display:flex;align-items:center;gap:7px}",
       ".dr-map-legend__swatch{display:inline-block;width:11px;height:11px;border-radius:999px;border:1px solid rgba(0,0,0,.14)}",
-      "@media(max-width:640px){.dr-lot-card-shell{width:calc(100% - 24px)}.dr-lot-card__title{font-size:19px}.dr-lot-card__details div{grid-template-columns:72px minmax(0,1fr)}}",
+      "@media(max-width:640px){.dr-lot-card{width:calc(100vw - 40px)}.dr-lot-card__title{font-size:19px}.dr-lot-card__details div{grid-template-columns:72px minmax(0,1fr)}}",
     ].join("");
     (document.head || document.documentElement).appendChild(style);
   }
